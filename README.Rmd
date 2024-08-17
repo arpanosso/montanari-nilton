@@ -1,4 +1,7 @@
 ---
+title: "Multivariada"
+author: "Montanari e Nilton"
+date: "2024-08-17"
 output: github_document
 ---
 
@@ -11,25 +14,265 @@ knitr::opts_chunk$set(
 )
 ```
 
-# montanari-nilton
 
-<!-- badges: start -->
-<!-- badges: end -->
-
-The goal of montanari-nilton is to ...
-
-What is special about using `README.Rmd` instead of just `README.md`? You can include R chunks like so:
-
-```{r cars}
-summary(cars)
+## Carregando pacotes
+```{r,message=FALSE,error=FALSE,warning=FALSE}
+library(readxl)
+library(tidyverse)
+library(janitor)
+library(skimr)
+library(vegan)
+library(corrplot)
+source("R/my-functions.R")
+theme_set(theme_bw())
 ```
 
-You'll still need to render `README.Rmd` regularly, to keep `README.md` up-to-date.
-
-You can also embed plots, for example:
-
-```{r pressure, echo = FALSE}
-plot(pressure)
+## Carregando os Bancos de dados
+```{r}
+data_set <- readr::read_rds("data/data_set.rds")
 ```
 
-In that case, don't forget to commit and push the resulting figure files, so they display on GitHub.
+
+
+### Estatística descritiva
+```{r}
+skim(data_set)
+```
+
+# Análise Multivariada - Por tratamento e por profundidade
+
+```{r}
+data_set <- data_set %>% 
+  pivot_longer(cols = rp1:m2) %>% 
+  mutate(
+    variavel = str_remove(name,".$"),
+    prof = str_sub(name,-1,-1)
+  )
+```
+
+
+```{r}
+tratamentos <- data_set %>% pull(tratamento) %>% unique()
+for(i in seq_along(tratamentos)){
+  for(j in 1:2){
+    my_trat <- tratamentos[i]
+    da <- data_set %>% 
+      select(-name) %>% 
+      filter(
+        tratamento == my_trat,
+        prof == j
+        ) %>% 
+      pivot_wider(values_from = value, names_from = variavel)
+
+    nomes <- da %>% 
+        pull(pontos)
+    da <- da %>% select(alt_m:m, -prof)
+    mc <- da %>%  cor()
+    
+    print("##########################################")
+    print(paste0("     Tratamento: ",tratamentos[i]))
+    print(paste0("     Profundidade: ",j))
+    print("##########################################")
+    print("======== Análise de correlação linear ========== ")
+    corrplot::corrplot(mc)
+    
+    print("======== Análise de Agrupamento Hierárquico ========== ")
+    da_pad<-decostand(da, 
+                      method = "standardize",
+                      na.rm=TRUE)
+    da_pad_euc<-vegdist(da_pad,"euclidean") 
+    da_pad_euc_ward<-hclust(da_pad_euc, method="ward.D")
+    plot(da_pad_euc_ward, 
+         ylab="Distância Euclidiana",
+         xlab="Acessos", hang=-1,
+         col="blue", las=1,
+         cex=.6,lwd=1.5);box()
+    grupo<-cutree(da_pad_euc_ward,3)
+    
+    
+    print("======== Análise de Componentes Principais ========== ")
+    pca <-  prcomp(da_pad,scale.=T)
+    # Autovalores
+    eig<-pca$sdev^2
+    print("==== Autovalores ====")
+    print(round(eig,3))
+    print("==== % da variância explicada ====")
+    ve<-eig/sum(eig)
+    print(round(ve,4))
+    print("==== % da variância explicada acumulada ====")
+    print(round(cumsum(ve),4)*100)
+    print("==== Poder Discriminante ====")
+    mcor<-cor(da_pad,pca$x)
+    corrplot(mcor)
+    print("==== screeplot ====")
+    screeplot(pca)
+    abline(h=1)
+    print("==== Gráfico Biplot ====")
+    pc1V<-cor(da_pad,pca$x)[,1]/sd(cor(da_pad,pca$x)[,1])
+    pc2V<-cor(da_pad,pca$x)[,2]/sd(cor(da_pad,pca$x)[,2])
+    pc3V<-cor(da_pad,pca$x)[,3]/sd(cor(da_pad,pca$x)[,3])
+    pc1c<-pca$x[,1]/sd(pca$x[,1])
+    pc2c<-pca$x[,2]/sd(pca$x[,2])
+    pc3c<-pca$x[,3]/sd(pca$x[,3])
+    nv<-ncol(da) 
+    
+    bip<-data.frame(pc1c,pc2c,pc3c,nomes,grupo)
+    texto <- data.frame(
+      x = pc1V,
+      y = pc2V,
+      z = pc3V,
+      label = names(da)
+    )
+    graf <- bip %>% 
+      ggplot(aes(x=pc1c,y=pc2c,color=grupo))+
+      geom_point(aes(shape = as_factor(grupo), color = as_factor(grupo)), size = 3) +
+      theme_minimal() + 
+      scale_shape_manual(values=16:18)+
+      scale_color_manual(values=c("#009E73", "#999999","#D55E00"))+
+      geom_vline(aes(xintercept=0),
+                 color="black", size=1)+
+      geom_hline(aes(yintercept=0),
+                 color="black", size=1)+
+      annotate(geom="segment",
+               x=rep(0,length(da)),
+               xend=texto$x,
+               y=rep(0,length(da)),
+               yend=texto$y,color="black",lwd=.5)+
+      geom_label(data=texto,aes(x=x,y=y,label=label),
+                 color="black",angle=0,fontface="bold",size=4,fill="white")+
+      labs(x=paste("CP1 (",round(100*ve[1],2),"%)",sep=""),
+           y=paste("CP2 (",round(100*ve[2],2),"%)",sep=""),
+           color="",shape="")+
+      theme(legend.position = "top")+
+      annotate(geom="text",
+               x=pc1c+.1,
+               y=pc2c+.1,
+               color="black",
+               label = nomes,
+               size = 2
+      )
+    print(graf)
+    
+    print("==== Tabela da correlação dos atributos com cada PC ====")
+    ck<-sum(pca$sdev^2>=0.98)
+    tabelapca<-vector()
+    for( l in 1:ck) tabelapca<-cbind(tabelapca,mcor[,l])
+    colnames(tabelapca)<-paste(rep(c("PC"),ck),1:ck,sep="")
+    pcat<-round(tabelapca,3)
+    tabelapca<-tabelapca[order(abs(tabelapca[,1])),]
+    print(tabelapca)
+  }
+}
+```
+
+
+# Análise Multivariada - por profundidade (considerando todos os tratamentos juntos)
+
+
+```{r}
+for(j in 1:2){
+  da <- data_set %>% 
+    select(-name) %>% 
+    filter(
+        prof == j
+    ) %>% 
+    pivot_wider(values_from = value, names_from = variavel)
+  
+  nomes <- da %>% mutate(nome = str_sub(tratamento, 1,1)) %>% 
+    pull(nome)
+  da <- da %>% select(alt_m:m, -prof)
+  mc <- da %>%  cor()
+
+  print("##########################################")
+  print(paste0("     Profundidade: ",j))
+  print("##########################################")
+  print("======== Análise de correlação linear ========== ")
+  corrplot::corrplot(mc)
+  
+  print("======== Análise de Agrupamento Hierárquico ========== ")
+  da_pad<-decostand(da, 
+                    method = "standardize",
+                    na.rm=TRUE)
+  da_pad_euc<-vegdist(da_pad,"euclidean") 
+  da_pad_euc_ward<-hclust(da_pad_euc, method="ward.D")
+  plot(da_pad_euc_ward, 
+       ylab="Distância Euclidiana",
+       xlab="Acessos", hang=-1,
+       col="blue", las=1,
+       cex=.6,lwd=1.5);box()
+  grupo<-cutree(da_pad_euc_ward,3)
+  
+  
+  print("======== Análise de Componentes Principais ========== ")
+  pca <-  prcomp(da_pad,scale.=T)
+  # Autovalores
+  eig<-pca$sdev^2
+  print("==== Autovalores ====")
+  print(round(eig,3))
+  print("==== % da variância explicada ====")
+  ve<-eig/sum(eig)
+  print(round(ve,4))
+  print("==== % da variância explicada acumulada ====")
+  print(round(cumsum(ve),4)*100)
+  print("==== Poder Discriminante ====")
+  mcor<-cor(da_pad,pca$x)
+  corrplot(mcor)
+  print("==== screeplot ====")
+  screeplot(pca)
+  abline(h=1)
+  print("==== Gráfico Biplot ====")
+  pc1V<-cor(da_pad,pca$x)[,1]/sd(cor(da_pad,pca$x)[,1])
+  pc2V<-cor(da_pad,pca$x)[,2]/sd(cor(da_pad,pca$x)[,2])
+  pc3V<-cor(da_pad,pca$x)[,3]/sd(cor(da_pad,pca$x)[,3])
+  pc1c<-pca$x[,1]/sd(pca$x[,1])
+  pc2c<-pca$x[,2]/sd(pca$x[,2])
+  pc3c<-pca$x[,3]/sd(pca$x[,3])
+  nv<-ncol(da) 
+  
+  bip<-data.frame(pc1c,pc2c,pc3c,nomes,grupo)
+  texto <- data.frame(
+    x = pc1V,
+    y = pc2V,
+    z = pc3V,
+    label = names(da)
+  )
+  graf <- bip %>% 
+    ggplot(aes(x=pc1c,y=pc2c,color=grupo))+
+    geom_point(aes(shape = as_factor(grupo), color = as_factor(grupo)), size = 3) +
+    theme_minimal() + 
+    scale_shape_manual(values=16:18)+
+    scale_color_manual(values=c("#009E73", "#999999","#D55E00"))+
+    geom_vline(aes(xintercept=0),
+               color="black", size=1)+
+    geom_hline(aes(yintercept=0),
+               color="black", size=1)+
+    annotate(geom="segment",
+             x=rep(0,length(da)),
+             xend=texto$x,
+             y=rep(0,length(da)),
+             yend=texto$y,color="black",lwd=.5)+
+    geom_label(data=texto,aes(x=x,y=y,label=label),
+               color="black",angle=0,fontface="bold",size=4,fill="white")+
+    labs(x=paste("CP1 (",round(100*ve[1],2),"%)",sep=""),
+         y=paste("CP2 (",round(100*ve[2],2),"%)",sep=""),
+         color="",shape="")+
+    theme(legend.position = "top")+
+    annotate(geom="text",
+             x=pc1c+.1,
+             y=pc2c+.1,
+             color="black",
+             label = nomes,
+             size = 2
+    )
+  print(graf)
+  
+  print("==== Tabela da correlação dos atributos com cada PC ====")
+  ck<-sum(pca$sdev^2>=0.98)
+  tabelapca<-vector()
+  for( l in 1:ck) tabelapca<-cbind(tabelapca,mcor[,l])
+  colnames(tabelapca)<-paste(rep(c("PC"),ck),1:ck,sep="")
+  pcat<-round(tabelapca,3)
+  tabelapca<-tabelapca[order(abs(tabelapca[,1])),]
+  print(tabelapca)
+}
+```
